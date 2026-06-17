@@ -57,6 +57,10 @@
   .add-more-btn:hover { background: var(--bg-secondary); }
   .api-label { font-size: 13px; color: var(--text-secondary); margin-bottom: 6px; display: block; }
   .api-input { font-family: 'Courier New', monospace !important; font-size: 13px !important; background: var(--bg-secondary) !important; }
+  .provider-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 3px 8px; border-radius: 20px; margin-top: 6px; background: var(--bg-secondary); color: var(--text-tertiary); border: 0.5px solid var(--border); }
+  .provider-badge.gemini { background: #e8f5e9; color: #2e7d32; border-color: #a5d6a7; }
+  .provider-badge.anthropic { background: #fff3e0; color: #e65100; border-color: #ffcc80; }
+  .provider-badge.openai { background: #e8f5e9; color: #1b5e20; border-color: #a5d6a7; }
   .analyse-btn { width: 100%; padding: 12px; font-size: 15px; font-weight: 500; border: none; border-radius: var(--radius-md); background: var(--text); color: var(--bg); cursor: pointer; transition: all 0.15s; margin-top: 1rem; display: flex; align-items: center; justify-content: center; gap: 8px; }
   .analyse-btn:hover { opacity: 0.85; }
   .analyse-btn:disabled { opacity: 0.35; cursor: not-allowed; }
@@ -79,6 +83,7 @@
   .disclaimer { font-size: 11px; color: var(--text-tertiary); margin-top: 1.25rem; line-height: 1.6; border-top: 0.5px solid var(--border); padding-top: 1rem; }
   .reset-btn { margin-top: 1rem; font-size: 13px; color: var(--text-secondary); background: none; border: 0.5px solid var(--border); border-radius: var(--radius-md); padding: 8px 16px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
   .reset-btn:hover { background: var(--bg-secondary); }
+  .free-badge { font-size: 11px; background: #e8f5e9; color: #2e7d32; border: 0.5px solid #a5d6a7; padding: 2px 7px; border-radius: 20px; margin-left: 6px; font-weight: 500; }
 </style>
 </head>
 <body>
@@ -120,8 +125,13 @@
     </div>
 
     <div style="margin-top:1.25rem;">
-      <label class="api-label"><i class="ti ti-key"></i> Your API key <span style="font-weight:400; color:#aaa;">(Claude or OpenAI — never stored)</span></label>
-      <input type="password" id="api-key" class="api-input" placeholder="sk-ant-... or sk-..." />
+      <label class="api-label">
+        <i class="ti ti-key"></i> Your API key
+        <span class="free-badge">Gemini is free</span>
+      </label>
+      <input type="password" id="api-key" class="api-input" placeholder="Gemini: AIza... &nbsp;|&nbsp; Claude: sk-ant-... &nbsp;|&nbsp; OpenAI: sk-..." oninput="detectProvider(this.value)" />
+      <div id="provider-badge"></div>
+      <p class="hint" style="margin-top:6px;">Get a free Gemini key at <a href="https://aistudio.google.com" target="_blank" style="color:var(--text);">aistudio.google.com</a> → Get API key. No credit card needed.</p>
     </div>
 
     <button class="analyse-btn" id="analyse-btn" onclick="runAnalysis()">
@@ -144,6 +154,26 @@ function switchTab(tab) {
     document.querySelectorAll('.tab')[i].classList.toggle('active', t===tab);
     document.getElementById('panel-'+t).classList.toggle('active', t===tab);
   });
+}
+
+function detectProvider(key) {
+  const badge = document.getElementById('provider-badge');
+  if (!key) { badge.innerHTML=''; return; }
+  if (key.startsWith('AIza')) {
+    badge.innerHTML = '<span class="provider-badge gemini"><i class="ti ti-brand-google"></i> Google Gemini detected — free tier</span>';
+  } else if (key.startsWith('sk-ant')) {
+    badge.innerHTML = '<span class="provider-badge anthropic"><i class="ti ti-robot"></i> Anthropic Claude detected</span>';
+  } else if (key.startsWith('sk-')) {
+    badge.innerHTML = '<span class="provider-badge openai"><i class="ti ti-brand-openai"></i> OpenAI detected</span>';
+  } else {
+    badge.innerHTML = '<span class="provider-badge">Paste your full key to auto-detect provider</span>';
+  }
+}
+
+function getProvider(key) {
+  if (key.startsWith('AIza')) return 'gemini';
+  if (key.startsWith('sk-ant')) return 'anthropic';
+  return 'openai';
 }
 
 function handlePhotos(input) {
@@ -186,24 +216,20 @@ async function runAnalysis() {
   clearError();
   document.getElementById('result-area').innerHTML = '';
   const apiKey = document.getElementById('api-key').value.trim();
-  if (!apiKey) { showError('Please enter your API key.'); return; }
+  if (!apiKey) { showError('Please enter your API key. Get a free Gemini key at aistudio.google.com.'); return; }
 
+  const provider = getProvider(apiKey);
   const btn = document.getElementById('analyse-btn');
   btn.disabled = true;
   btn.innerHTML = '<i class="ti ti-loader"></i> Analysing...';
 
   try {
     let body = {};
-    const isAnthropic = apiKey.startsWith('sk-ant');
 
     if (activeTab === 'paste') {
       const text = document.getElementById('paste-input').value.trim();
       if (!text) { showError('Please paste the ingredient list first.'); resetBtn(); return; }
-      if (isAnthropic) {
-        body = { apiKey, provider:'anthropic', system: systemPrompt(), messages:[{role:'user',content:`Analyse these ingredients:\n\n${text}`}] };
-      } else {
-        body = { apiKey, provider:'openai', messages:[{role:'system',content:systemPrompt()},{role:'user',content:`Analyse these ingredients:\n\n${text}`}] };
-      }
+      body = buildBody(provider, apiKey, text, null);
 
     } else if (activeTab === 'url') {
       const url = document.getElementById('url-input').value.trim();
@@ -214,25 +240,12 @@ async function runAnalysis() {
         const data = await res.json();
         const match = data.contents && data.contents.match(/ingredient[s]?\s*[:\-]?\s*([^<]{30,1000})/i);
         if (!match) { document.getElementById('result-area').innerHTML=''; showError('Could not extract ingredients from this URL. Please switch to Paste or Upload photos.'); resetBtn(); return; }
-        const text = match[1].trim();
-        if (isAnthropic) {
-          body = { apiKey, provider:'anthropic', system: systemPrompt(), messages:[{role:'user',content:`Analyse these ingredients:\n\n${text}`}] };
-        } else {
-          body = { apiKey, provider:'openai', messages:[{role:'system',content:systemPrompt()},{role:'user',content:`Analyse these ingredients:\n\n${text}`}] };
-        }
+        body = buildBody(provider, apiKey, match[1].trim(), null);
       } catch { document.getElementById('result-area').innerHTML=''; showError('Could not fetch URL. Please switch to Paste or Upload photos.'); resetBtn(); return; }
 
     } else if (activeTab === 'photo') {
       if (!photos.length) { showError('Please upload at least one photo.'); resetBtn(); return; }
-      if (isAnthropic) {
-        const content = photos.map(p=>({type:'image',source:{type:'base64',media_type:p.mime,data:p.base64}}));
-        content.push({type:'text',text:`Read the ingredient list${photos.length>1?' across all '+photos.length+' photos':''} and analyse every ingredient.`});
-        body = { apiKey, provider:'anthropic', system: systemPrompt(), messages:[{role:'user',content}] };
-      } else {
-        const imgContent = photos.map(p=>({type:'image_url',image_url:{url:`data:${p.mime};base64,${p.base64}`}}));
-        imgContent.push({type:'text',text:`Analyse every ingredient visible in ${photos.length>1?'these '+photos.length+' photos':'this photo'}.`});
-        body = { apiKey, provider:'openai', messages:[{role:'system',content:systemPrompt()},{role:'user',content:imgContent}] };
-      }
+      body = buildBody(provider, apiKey, null, photos);
     }
 
     document.getElementById('result-area').innerHTML = '<div class="card"><p class="loading-msg"><i class="ti ti-microscope"></i> Reading ingredients...</p></div>';
@@ -244,14 +257,12 @@ async function runAnalysis() {
     });
     const data = await res.json();
 
+    if (data.error) { showError('API error: ' + (data.error.message || JSON.stringify(data.error))); document.getElementById('result-area').innerHTML=''; resetBtn(); return; }
+
     let responseText = '';
-    if (isAnthropic) {
-      if (data.error) { showError('API error: ' + data.error.message); document.getElementById('result-area').innerHTML=''; resetBtn(); return; }
-      responseText = data.content[0].text;
-    } else {
-      if (data.error) { showError('API error: ' + data.error.message); document.getElementById('result-area').innerHTML=''; resetBtn(); return; }
-      responseText = data.choices[0].message.content;
-    }
+    if (data._provider === 'anthropic') responseText = data.content[0].text;
+    else if (data._provider === 'openai') responseText = data.choices[0].message.content;
+    else if (data._provider === 'gemini') responseText = data.text;
 
     renderResult(responseText);
   } catch(e) {
@@ -259,6 +270,41 @@ async function runAnalysis() {
     document.getElementById('result-area').innerHTML = '';
   }
   resetBtn();
+}
+
+function buildBody(provider, apiKey, text, photoArr) {
+  const sys = systemPrompt();
+  if (provider === 'anthropic') {
+    let content;
+    if (photoArr) {
+      content = photoArr.map(p=>({type:'image',source:{type:'base64',media_type:p.mime,data:p.base64}}));
+      content.push({type:'text',text:`Read the ingredient list${photoArr.length>1?' across all '+photoArr.length+' photos':''} and analyse every ingredient.`});
+    } else {
+      content = `Analyse these ingredients:\n\n${text}`;
+    }
+    return { apiKey, provider, system: sys, messages:[{role:'user',content}] };
+
+  } else if (provider === 'openai') {
+    const msgs = [{role:'system',content:sys}];
+    if (photoArr) {
+      const imgContent = photoArr.map(p=>({type:'image_url',image_url:{url:`data:${p.mime};base64,${p.base64}`}}));
+      imgContent.push({type:'text',text:`Analyse every ingredient visible in ${photoArr.length>1?'these '+photoArr.length+' photos':'this photo'}.`});
+      msgs.push({role:'user',content:imgContent});
+    } else {
+      msgs.push({role:'user',content:`Analyse these ingredients:\n\n${text}`});
+    }
+    return { apiKey, provider, messages: msgs };
+
+  } else {
+    let content;
+    if (photoArr) {
+      content = photoArr.map(p=>({type:'image',source:{type:'base64',media_type:p.mime,data:p.base64}}));
+      content.push({type:'text',text:`Read the ingredient list${photoArr.length>1?' across all '+photoArr.length+' photos':''} and analyse every ingredient.`});
+    } else {
+      content = `Analyse these ingredients:\n\n${text}`;
+    }
+    return { apiKey, provider: 'gemini', system: sys, messages:[{role:'user',content: typeof content==='string'?content:content}] };
+  }
 }
 
 function renderResult(raw) {
@@ -292,6 +338,8 @@ function resetAll() {
   document.getElementById('result-area').innerHTML='';
   document.getElementById('paste-input').value='';
   document.getElementById('url-input').value='';
+  document.getElementById('api-key').value='';
+  document.getElementById('provider-badge').innerHTML='';
   photos=[]; renderPhotoGrid(); clearError();
   window.scrollTo({top:0,behavior:'smooth'});
 }
